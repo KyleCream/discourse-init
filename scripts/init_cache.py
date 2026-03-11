@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+import requests
 from pathlib import Path
 from utils import load_config, load_cache, save_cache, get_discourse_client
 
@@ -54,28 +55,50 @@ def main():
     while True:
         try:
             # 拉取帖子列表
-            response = client._session.get(
-                f"{client.url}/latest.json",
-                headers=client.headers,
-                params={"page": page}
+            url = f"{client.url}/latest.json?page={page}"
+            print(f"正在拉取: {url}")
+            
+            response = requests.get(
+                url,
+                headers=client.headers
             )
+            print(f"响应状态码: {response.status_code}")
+            
             response.raise_for_status()
             data = response.json()
             
             topics = data.get('topic_list', {}).get('topics', [])
+            print(f"第 {page} 页获取到 {len(topics)} 个帖子")
+            
             if not topics:
                 break
             
             for topic in topics:
                 # 检查时间范围
                 if start_time:
-                    created_at = time.mktime(time.strptime(topic['created_at'], "%Y-%m-%dT%H:%M:%S.%fZ"))
+                    created_at_str = topic['created_at']
+                    # 处理不同的时间格式
+                    if '.' in created_at_str:
+                        created_at = time.mktime(time.strptime(created_at_str, "%Y-%m-%dT%H:%M:%S.%fZ"))
+                    else:
+                        created_at = time.mktime(time.strptime(created_at_str, "%Y-%m-%dT%H:%M:%SZ"))
                     if created_at < start_time:
                         print(f"\n已到达时间范围，停止拉取")
                         break
                 
                 topic_id = topic['id']
+                topic_title = topic.get('title', '无标题')
                 topic_tags = topic.get('tags', [])
+                # 处理tag是字典的情况（Discourse API返回的tag包含id/name/slug）
+                processed_tags = []
+                for tag in topic_tags:
+                    if isinstance(tag, dict):
+                        processed_tags.append(tag['name'])
+                    else:
+                        processed_tags.append(tag)
+                topic_tags = processed_tags
+                
+                print(f"处理帖子: #{topic_id} {topic_title} (tags: {topic_tags})")
                 
                 # 过滤不在白名单的tag
                 if allowed_tags:
@@ -84,19 +107,14 @@ def main():
                 if not topic_tags:
                     continue
                 
-                # 获取完整帖子详情
-                full_topic = client.get_topic(topic_id)
-                if not full_topic:
-                    continue
-                
-                # 更新每个tag的索引
+                # 简化：先只存基础帖子信息，不获取完整详情
                 for tag in topic_tags:
                     tag_file = os.path.join(config['tag_root'], f"{tag}.json")
                     tag_data = load_cache(tag_file) or {"topics": []}
                     tag_topics = tag_data.get("topics", [])
                     
                     if not any(t.get("id") == topic_id for t in tag_topics):
-                        tag_topics.insert(0, full_topic)
+                        tag_topics.insert(0, topic)
                         if len(tag_topics) > 500:  # 每个tag最多保留500帖
                             tag_topics = tag_topics[:500]
                         
@@ -105,6 +123,7 @@ def main():
                         save_cache(tag_file, tag_data)
                         
                         tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                        print(f"  更新Tag '{tag}'，当前 {len(tag_topics)} 帖")
                 
                 total_posts += 1
                 if args.limit and total_posts >= args.limit:
@@ -124,6 +143,8 @@ def main():
             print(f"处理完第 {page} 页，共 {total_posts} 帖")
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"❌ 拉取失败: {str(e)}")
             break
     

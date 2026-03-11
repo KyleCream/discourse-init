@@ -46,6 +46,8 @@ discourse-coldstart/
 }
 ```
 
+**重要说明**：`tag_root` 和 `domains_file` 请配置为 `discourse-recommender-service` Skill 下的对应路径，确保冷启动生成的数据可以被推荐服务直接读取使用。
+
 ### 2. 执行冷启动
 
 ```bash
